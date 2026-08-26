@@ -32,8 +32,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _controller = TextEditingController();
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  late YoutubeExplode _yt;
+  late final AudioPlayer _audioPlayer;
+  late final YoutubeExplode _yt;
 
   bool _isLoading = false;
   String? _currentTitle;
@@ -43,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
+    _audioPlayer = AudioPlayer();
     _yt = YoutubeExplode();
   }
 
@@ -54,10 +55,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // 1. Search YouTube with a 10-second timeout safeguard
+      // 1. Search YouTube
       final searchResult = await _yt.search.search(query).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw Exception('Search timed out. Check connection.'),
+        const Duration(seconds: 12),
+        onTimeout: () => throw Exception('Search timed out.'),
       );
 
       if (searchResult.isEmpty) {
@@ -66,21 +67,27 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
 
-      // 2. Fetch manifest & extract audio-only stream
-      final manifest = await _yt.videos.streamsClient.getManifest(video.id).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw Exception('Stream fetch timed out.'),
-      );
+      // 2. Fetch stream manifest and extract audio stream
+      final manifest = await _yt.videos.streamsClient.getManifest(video.id);
       
-      final streamInfo = manifest.audioOnly.withHighestBitrate();
+      // Select best audio-only stream
+      final audioStreams = manifest.audioOnly;
+      if (audioStreams.isEmpty) {
+        throw Exception('No valid audio stream found for this video.');
+      }
+      
+      final streamInfo = audioStreams.withHighestBitrate();
+      final streamUrl = streamInfo.url.toString();
 
-      // 3. Reset audio player state before assigning new stream
+      // 3. Stop player & set audio source directly
       await _audioPlayer.stop();
-      await _audioPlayer.setUrl(streamInfo.url.toString()).timeout(
-        const Duration(seconds: 10),
-        onTimeout: () => throw Exception('Audio initialization timed out.'),
-      );
       
+      final audioSource = AudioSource.uri(
+        Uri.parse(streamUrl),
+        tag: video.title,
+      );
+
+      await _audioPlayer.setAudioSource(audioSource);
       _audioPlayer.play();
 
       setState(() {
@@ -152,7 +159,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   CircularProgressIndicator(),
                   SizedBox(height: 12),
-                  Text('Resolving stream from YouTube...', style: TextStyle(color: Colors.grey)),
+                  Text('Loading stream from YouTube...', style: TextStyle(color: Colors.grey)),
                 ],
               )
             else if (_currentTitle != null) ...[
