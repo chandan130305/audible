@@ -1,6 +1,7 @@
-import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() {
@@ -25,27 +26,6 @@ class AudibleApp extends StatelessWidget {
   }
 }
 
-// Custom StreamAudioSource that feeds audio stream bytes directly to just_audio
-class YouTubeAudioSource extends StreamAudioSource {
-  final YoutubeExplode yt;
-  final AudioStreamInfo streamInfo;
-
-  YouTubeAudioSource(this.yt, this.streamInfo);
-
-  @override
-  Future<StreamAudioResponse> request([int? start, int? end]) async {
-    final stream = yt.videos.streamsClient.get(streamInfo);
-    
-    return StreamAudioResponse(
-      sourceLength: streamInfo.size.totalBytes,
-      contentLength: streamInfo.size.totalBytes,
-      offset: 0,
-      stream: stream,
-      contentType: 'audio/mpeg',
-    );
-  }
-}
-
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -63,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _currentTitle;
   String? _currentArtist;
   String? _thumbnailUrl;
+  File? _tempAudioFile;
 
   @override
   void initState() {
@@ -90,7 +71,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      
+
       final audioStreams = manifest.audioOnly;
       if (audioStreams.isEmpty) {
         throw Exception('No valid audio stream found.');
@@ -98,11 +79,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final audioStreamInfo = audioStreams.withHighestBitrate();
 
+      // Clean up previous temporary file if present
+      if (_tempAudioFile != null && await _tempAudioFile!.exists()) {
+        try {
+          await _tempAudioFile!.delete();
+        } catch (_) {}
+      }
+
+      // Download stream chunks into a local temp file
+      final tempDir = await getTemporaryDirectory();
+      _tempAudioFile = File('${tempDir.path}/temp_track.m4a');
+
+      final audioStream = _yt.videos.streamsClient.get(audioStreamInfo);
+      final fileStream = _tempAudioFile!.openWrite();
+
+      await audioStream.pipe(fileStream);
+      await fileStream.close();
+
+      // Load into audio engine via file path
       await _player.stop();
-      
-      // Feed stream directly to player engine via custom StreamAudioSource
-      final source = YouTubeAudioSource(_yt, audioStreamInfo);
-      await _player.setAudioSource(source);
+      await _player.setFilePath(_tempAudioFile!.path);
       _player.play();
 
       setState(() {
@@ -131,6 +127,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _player.dispose();
     _yt.close();
     _controller.dispose();
+    if (_tempAudioFile != null && _tempAudioFile!.existsSync()) {
+      _tempAudioFile!.deleteSync();
+    }
     super.dispose();
   }
 
