@@ -49,6 +49,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _player = Player();
     _yt = YoutubeExplode();
 
+    // Track real-time playback state
     _player.stream.playing.listen((playing) {
       if (mounted) {
         setState(() => _isPlaying = playing);
@@ -62,17 +63,30 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isLoading = true);
 
     try {
+      // 1. Fetch YouTube Search Result
       final searchResult = await _yt.search.search(query);
-      if (searchResult.isEmpty) throw Exception('No results found.');
+      if (searchResult.isEmpty) {
+        throw Exception('No results found.');
+      }
 
       final video = searchResult.first;
-      final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      
-      // Select audio stream
-      final audioStream = manifest.audioOnly.withHighestBitrate();
 
-      // Open media URL directly (instant playback, no local saving)
-      await _player.open(Media(audioStream.url.toString()));
+      // 2. Fetch Manifest and get highest quality Audio Stream URL
+      final manifest = await _yt.videos.streamsClient.getManifest(video.id);
+      final audioStreams = manifest.audioOnly;
+
+      if (audioStreams.isEmpty) {
+        throw Exception('No valid audio stream found.');
+      }
+
+      final audioStream = audioStreams.withHighestBitrate();
+
+      // 3. Stop active playback & open audio stream with auto-play enabled
+      await _player.stop();
+      await _player.open(
+        Media(audioStream.url.toString()),
+        play: true, // Force start playback immediately
+      );
 
       setState(() {
         _currentTitle = video.title;
@@ -82,11 +96,16 @@ class _HomeScreenState extends State<HomeScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.toString()}'), backgroundColor: Colors.redAccent),
+          SnackBar(
+            content: Text('Playback failed: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.redAccent,
+          ),
         );
       }
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -101,7 +120,11 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Audible Streamer'), centerTitle: true, backgroundColor: Colors.deepPurple),
+      appBar: AppBar(
+        title: const Text('Audible Streamer'),
+        centerTitle: true,
+        backgroundColor: Colors.deepPurple,
+      ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -112,11 +135,17 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: TextField(
                     controller: _controller,
                     onSubmitted: _playYouTubeAudio,
-                    decoration: const InputDecoration(hintText: 'Search track...', border: OutlineInputBorder()),
+                    decoration: const InputDecoration(
+                      hintText: 'Search song or paste YouTube link...',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(icon: const Icon(Icons.search, size: 30), onPressed: () => _playYouTubeAudio(_controller.text)),
+                IconButton(
+                  icon: const Icon(Icons.search, size: 30),
+                  onPressed: () => _playYouTubeAudio(_controller.text),
+                ),
               ],
             ),
             const SizedBox(height: 30),
@@ -129,12 +158,20 @@ class _HomeScreenState extends State<HomeScreen> {
                   child: Image.network(_thumbnailUrl!, height: 200, fit: BoxFit.cover),
                 ),
               const SizedBox(height: 20),
-              Text(_currentTitle!, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-              Text(_currentArtist ?? '', style: const TextStyle(fontSize: 14, color: Colors.grey)),
+              Text(
+                _currentTitle!,
+                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 4),
+              Text(
+                _currentArtist ?? '',
+                style: const TextStyle(fontSize: 14, color: Colors.grey),
+              ),
               const SizedBox(height: 20),
               IconButton(
-                iconSize: 48,
-                icon: Icon(_isPlaying ? Icons.pause_circle : Icons.play_circle),
+                iconSize: 56,
+                icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
                 onPressed: () => _player.playOrPause(),
               ),
             ] else
