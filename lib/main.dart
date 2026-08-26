@@ -1,10 +1,9 @@
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
-import 'package:media_kit/media_kit.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
   runApp(const AudibleApp());
 }
 
@@ -34,7 +33,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _controller = TextEditingController();
-  late final Player _player;
+  late final AudioPlayer _audioPlayer;
   late final YoutubeExplode _yt;
 
   bool _isLoading = false;
@@ -46,12 +45,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _player = Player();
+    _audioPlayer = AudioPlayer();
     _yt = YoutubeExplode();
 
-    _player.stream.playing.listen((playing) {
+    _audioPlayer.onPlayerStateChanged.listen((state) {
       if (mounted) {
-        setState(() => _isPlaying = playing);
+        setState(() => _isPlaying = state == PlayerState.playing);
       }
     });
   }
@@ -70,24 +69,15 @@ class _HomeScreenState extends State<HomeScreen> {
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
 
-      // Prefer M4A streams for native playback compatibility
-      final m4aStreams = manifest.audioOnly.where((s) => s.container.name == 'm4a');
-      final audioStream = m4aStreams.isNotEmpty
-          ? m4aStreams.withHighestBitrate()
-          : manifest.audioOnly.withHighestBitrate();
+      final audioStreams = manifest.audioOnly;
+      if (audioStreams.isEmpty) {
+        throw Exception('No valid audio stream found.');
+      }
 
-      await _player.stop();
-      await _player.open(
-        Media(
-          audioStream.url.toString(),
-          httpHeaders: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://www.youtube.com/',
-          },
-        ),
-        play: true,
-      );
+      final audioStream = audioStreams.withHighestBitrate();
+
+      await _audioPlayer.stop();
+      await _audioPlayer.play(UrlSource(audioStream.url.toString()));
 
       setState(() {
         _currentTitle = video.title;
@@ -110,9 +100,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _togglePlayPause() async {
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+    } else {
+      await _audioPlayer.resume();
+    }
+  }
+
   @override
   void dispose() {
-    _player.dispose();
+    _audioPlayer.dispose();
     _yt.close();
     _controller.dispose();
     super.dispose();
@@ -173,7 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
               IconButton(
                 iconSize: 56,
                 icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                onPressed: () => _player.playOrPause(),
+                onPressed: _togglePlayPause,
               ),
             ] else
               const Text('Search for a track to play!'),
