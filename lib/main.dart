@@ -68,23 +68,36 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      final audioStreams = manifest.audioOnly;
+      
+      // Filter specifically for M4A containers for high desktop compatibility
+      final m4aStreams = manifest.audioOnly.where((s) => s.container.name == 'm4a');
+      final audioStream = m4aStreams.isNotEmpty
+          ? m4aStreams.withHighestBitrate()
+          : manifest.audioOnly.withHighestBitrate();
 
-      if (audioStreams.isEmpty) {
-        throw Exception('No valid audio stream found.');
-      }
-
-      final audioStream = audioStreams.withHighestBitrate();
-
-      // just_audio handles remote streams cleanly on Windows
-      await _player.setUrl(audioStream.url.toString());
-      _player.play();
-
+      // Update basic UI data immediately before network stream initialization
       setState(() {
         _currentTitle = video.title;
         _currentArtist = video.author;
         _thumbnailUrl = video.thumbnails.highResUrl;
+        _isLoading = false;
       });
+
+      // Stop any prior track
+      await _player.stop();
+
+      // Create AudioSource with custom headers to prevent hang/block
+      final audioSource = AudioSource.uri(
+        Uri.parse(audioStream.url.toString()),
+        headers: {
+          'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': 'https://www.youtube.com/',
+        },
+      );
+
+      await _player.setAudioSource(audioSource);
+      _player.play();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
