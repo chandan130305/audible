@@ -12,7 +12,7 @@ class AudibleApp extends StatelessWidget {
   const AudibleApp({super.key});
 
   @override
-  Widget build(Widget context) {
+  Widget build(BuildContext context) {
     return MaterialApp(
       title: 'Audible Streamer',
       debugShowCheckedModeBanner: false,
@@ -69,22 +69,20 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      
-      // Get highest bitrate audio stream
-      final audioStreams = manifest.audioOnly;
-      if (audioStreams.isEmpty) {
-        throw Exception('No valid audio stream found.');
-      }
-      
-      final audioStream = audioStreams.withHighestBitrate();
 
-      // Pass HTTP headers to bypass YouTube rate-limiting / blocking
+      // Prefer M4A streams for native playback compatibility
+      final m4aStreams = manifest.audioOnly.where((s) => s.container.name == 'm4a');
+      final audioStream = m4aStreams.isNotEmpty
+          ? m4aStreams.withHighestBitrate()
+          : manifest.audioOnly.withHighestBitrate();
+
       await _player.stop();
       await _player.open(
         Media(
           audioStream.url.toString(),
           httpHeaders: {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Referer': 'https://www.youtube.com/',
           },
         ),
