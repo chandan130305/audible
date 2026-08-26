@@ -1,5 +1,5 @@
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
 void main() {
@@ -33,7 +33,7 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _controller = TextEditingController();
-  late final AudioPlayer _audioPlayer;
+  late final AudioPlayer _player;
   late final YoutubeExplode _yt;
 
   bool _isLoading = false;
@@ -45,12 +45,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-    _audioPlayer = AudioPlayer();
+    _player = AudioPlayer();
     _yt = YoutubeExplode();
 
-    _audioPlayer.onPlayerStateChanged.listen((state) {
+    _player.playerStateStream.listen((state) {
       if (mounted) {
-        setState(() => _isPlaying = state == PlayerState.playing);
+        setState(() => _isPlaying = state.playing);
       }
     });
   }
@@ -68,16 +68,17 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-
       final audioStreams = manifest.audioOnly;
+
       if (audioStreams.isEmpty) {
         throw Exception('No valid audio stream found.');
       }
 
       final audioStream = audioStreams.withHighestBitrate();
 
-      await _audioPlayer.stop();
-      await _audioPlayer.play(UrlSource(audioStream.url.toString()));
+      // just_audio handles remote streams cleanly on Windows
+      await _player.setUrl(audioStream.url.toString());
+      _player.play();
 
       setState(() {
         _currentTitle = video.title;
@@ -100,17 +101,9 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _togglePlayPause() async {
-    if (_isPlaying) {
-      await _audioPlayer.pause();
-    } else {
-      await _audioPlayer.resume();
-    }
-  }
-
   @override
   void dispose() {
-    _audioPlayer.dispose();
+    _player.dispose();
     _yt.close();
     _controller.dispose();
     super.dispose();
@@ -171,7 +164,13 @@ class _HomeScreenState extends State<HomeScreen> {
               IconButton(
                 iconSize: 56,
                 icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
-                onPressed: _togglePlayPause,
+                onPressed: () {
+                  if (_isPlaying) {
+                    _player.pause();
+                  } else {
+                    _player.play();
+                  }
+                },
               ),
             ] else
               const Text('Search for a track to play!'),
