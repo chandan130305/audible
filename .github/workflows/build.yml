@@ -33,10 +33,12 @@ jobs:
         with:
           channel: 'stable'
           cache: true
-      # Enable Windows support BEFORE pub get so native plugins bind properly
       - run: flutter config --enable-windows-desktop
       - run: flutter pub get
-      - run: flutter build windows --release
+      - name: Build Windows Executable
+        env:
+          CL: "/D_SILENCE_EXPERIMENTAL_COROUTINE_DEPRECATION_WARNINGS"
+        run: flutter build windows --release
       - shell: pwsh
         run: |
           Compress-Archive -Path build\windows\x64\runner\Release\* -DestinationPath build\windows-app.zip
