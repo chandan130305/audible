@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -36,6 +38,9 @@ class _HomeScreenState extends State<HomeScreen> {
   late final AudioPlayer _player;
   late final YoutubeExplode _yt;
 
+  HttpServer? _localProxyServer;
+  StreamSubscription? _proxySubscription;
+  
   bool _isLoading = false;
   bool _isPlaying = false;
   String? _currentTitle;
@@ -55,6 +60,50 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  // Starts a local proxy on localhost to relay YouTube audio bytes to just_audio
+  Future<String> _startLocalProxy(String youtubeStreamUrl) async {
+    await _stopLocalProxy();
+
+    _localProxyServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final port = _localProxyServer!.port;
+
+    final client = HttpClient();
+
+    _proxySubscription = _localProxyServer!.listen((HttpRequest req) async {
+      try {
+        final ytReq = await client.getUrl(Uri.parse(youtubeStreamUrl));
+        ytReq.headers.set(
+          'User-Agent',
+          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        );
+        ytReq.headers.set('Referer', 'https://www.youtube.com/');
+
+        final ytResponse = await ytReq.close();
+        
+        req.response.statusCode = ytResponse.statusCode;
+        ytResponse.headers.forEach((name, values) {
+          for (var value in values) {
+            req.response.headers.add(name, value);
+          }
+        });
+
+        await ytResponse.pipe(req.response);
+      } catch (e) {
+        req.response.statusCode = HttpStatus.internalServerError;
+        await req.response.close();
+      }
+    });
+
+    return 'http://127.0.0.1:$port/';
+  }
+
+  Future<void> _stopLocalProxy() async {
+    await _proxySubscription?.cancel();
+    _proxySubscription = null;
+    await _localProxyServer?.close(force: true);
+    _localProxyServer = null;
+  }
+
   Future<void> _playYouTubeAudio(String query) async {
     if (query.trim().isEmpty) return;
 
@@ -68,36 +117,26 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-      
-      // Filter specifically for M4A containers for high desktop compatibility
-      final m4aStreams = manifest.audioOnly.where((s) => s.container.name == 'm4a');
-      final audioStream = m4aStreams.isNotEmpty
-          ? m4aStreams.withHighestBitrate()
-          : manifest.audioOnly.withHighestBitrate();
 
-      // Update basic UI data immediately before network stream initialization
+      final audioStreams = manifest.audioOnly;
+      if (audioStreams.isEmpty) {
+        throw Exception('No valid audio stream found.');
+      }
+
+      final audioStream = audioStreams.withHighestBitrate();
+
+      // Route through local proxy
+      final proxyUrl = await _startLocalProxy(audioStream.url.toString());
+
+      await _player.stop();
+      await _player.setUrl(proxyUrl);
+      _player.play();
+
       setState(() {
         _currentTitle = video.title;
         _currentArtist = video.author;
         _thumbnailUrl = video.thumbnails.highResUrl;
-        _isLoading = false;
       });
-
-      // Stop any prior track
-      await _player.stop();
-
-      // Create AudioSource with custom headers to prevent hang/block
-      final audioSource = AudioSource.uri(
-        Uri.parse(audioStream.url.toString()),
-        headers: {
-          'User-Agent':
-              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Referer': 'https://www.youtube.com/',
-        },
-      );
-
-      await _player.setAudioSource(audioSource);
-      _player.play();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -116,6 +155,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
+    _stopLocalProxy();
     _player.dispose();
     _yt.close();
     _controller.dispose();
