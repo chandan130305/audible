@@ -12,7 +12,7 @@ class AudibleApp extends StatelessWidget {
   const AudibleApp({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(Widget context) {
     return MaterialApp(
       title: 'Audible Streamer',
       debugShowCheckedModeBanner: false,
@@ -49,7 +49,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _player = Player();
     _yt = YoutubeExplode();
 
-    // Track real-time playback state
     _player.stream.playing.listen((playing) {
       if (mounted) {
         setState(() => _isPlaying = playing);
@@ -63,29 +62,33 @@ class _HomeScreenState extends State<HomeScreen> {
     setState(() => _isLoading = true);
 
     try {
-      // 1. Fetch YouTube Search Result
       final searchResult = await _yt.search.search(query);
       if (searchResult.isEmpty) {
         throw Exception('No results found.');
       }
 
       final video = searchResult.first;
-
-      // 2. Fetch Manifest and get highest quality Audio Stream URL
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
+      
+      // Get highest bitrate audio stream
       final audioStreams = manifest.audioOnly;
-
       if (audioStreams.isEmpty) {
         throw Exception('No valid audio stream found.');
       }
-
+      
       final audioStream = audioStreams.withHighestBitrate();
 
-      // 3. Stop active playback & open audio stream with auto-play enabled
+      // Pass HTTP headers to bypass YouTube rate-limiting / blocking
       await _player.stop();
       await _player.open(
-        Media(audioStream.url.toString()),
-        play: true, // Force start playback immediately
+        Media(
+          audioStream.url.toString(),
+          httpHeaders: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Referer': 'https://www.youtube.com/',
+          },
+        ),
+        play: true,
       );
 
       setState(() {
