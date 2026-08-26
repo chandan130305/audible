@@ -33,12 +33,18 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final TextEditingController _controller = TextEditingController();
   final AudioPlayer _audioPlayer = AudioPlayer();
-  final YoutubeExplode _yt = YoutubeExplode();
+  late YoutubeExplode _yt;
 
   bool _isLoading = false;
   String? _currentTitle;
   String? _currentArtist;
   String? _thumbnailUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _yt = YoutubeExplode();
+  }
 
   Future<void> _playYouTubeAudio(String query) async {
     if (query.trim().isEmpty) return;
@@ -48,20 +54,33 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     try {
-      // 1. Search YouTube for query
-      final searchResult = await _yt.search.search(query);
+      // 1. Search YouTube with a 10-second timeout safeguard
+      final searchResult = await _yt.search.search(query).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('Search timed out. Check connection.'),
+      );
+
       if (searchResult.isEmpty) {
-        throw Exception('No results found');
+        throw Exception('No results found for "$query"');
       }
 
       final video = searchResult.first;
 
-      // 2. Fetch stream manifest and extract highest bitrate audio URL
-      final manifest = await _yt.videos.streamsClient.getManifest(video.id);
+      // 2. Fetch manifest & extract audio-only stream
+      final manifest = await _yt.videos.streamsClient.getManifest(video.id).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('Stream fetch timed out.'),
+      );
+      
       final streamInfo = manifest.audioOnly.withHighestBitrate();
 
-      // 3. Pass direct stream URL to just_audio player
-      await _audioPlayer.setUrl(streamInfo.url.toString());
+      // 3. Reset audio player state before assigning new stream
+      await _audioPlayer.stop();
+      await _audioPlayer.setUrl(streamInfo.url.toString()).timeout(
+        const Duration(seconds: 10),
+        onTimeout: () => throw Exception('Audio initialization timed out.'),
+      );
+      
       _audioPlayer.play();
 
       setState(() {
@@ -70,13 +89,20 @@ class _HomeScreenState extends State<HomeScreen> {
         _thumbnailUrl = video.thumbnails.highResUrl;
       });
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Playback failed: $e')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Playback failed: ${e.toString().replaceAll('Exception: ', '')}'),
+            backgroundColor: Colors.redAccent,
+          ),
+        );
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -100,12 +126,12 @@ class _HomeScreenState extends State<HomeScreen> {
         padding: const EdgeInsets.all(16.0),
         child: Column(
           children: [
-            // Search Input
             Row(
               children: [
                 Expanded(
                   child: TextField(
                     controller: _controller,
+                    onSubmitted: (value) => _playYouTubeAudio(value),
                     decoration: const InputDecoration(
                       hintText: 'Search song or paste YouTube link...',
                       border: OutlineInputBorder(),
@@ -120,10 +146,15 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             const SizedBox(height: 30),
-
-            // Main Display
             if (_isLoading)
-              const CircularProgressIndicator()
+              const Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 12),
+                  Text('Resolving stream from YouTube...', style: TextStyle(color: Colors.grey)),
+                ],
+              )
             else if (_currentTitle != null) ...[
               if (_thumbnailUrl != null)
                 ClipRRect(
@@ -142,8 +173,6 @@ class _HomeScreenState extends State<HomeScreen> {
                 style: const TextStyle(fontSize: 14, color: Colors.grey),
               ),
               const SizedBox(height: 20),
-
-              // Player Controls
               StreamBuilder<PlayerState>(
                 stream: _audioPlayer.playerStateStream,
                 builder: (context, snapshot) {
