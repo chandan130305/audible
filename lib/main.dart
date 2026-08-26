@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
@@ -26,6 +25,27 @@ class AudibleApp extends StatelessWidget {
   }
 }
 
+// Custom StreamAudioSource that feeds audio stream bytes directly to just_audio
+class YouTubeAudioSource extends StreamAudioSource {
+  final YoutubeExplode yt;
+  final AudioStreamInfo streamInfo;
+
+  YouTubeAudioSource(this.yt, this.streamInfo);
+
+  @override
+  Future<StreamAudioResponse> request([int? start, int? end]) async {
+    final stream = yt.videos.streamsClient.get(streamInfo);
+    
+    return StreamAudioResponse(
+      sourceLength: streamInfo.size.totalBytes,
+      contentLength: streamInfo.size.totalBytes,
+      offset: 0,
+      stream: stream,
+      contentType: 'audio/mpeg',
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
@@ -38,9 +58,6 @@ class _HomeScreenState extends State<HomeScreen> {
   late final AudioPlayer _player;
   late final YoutubeExplode _yt;
 
-  HttpServer? _localProxyServer;
-  StreamSubscription? _proxySubscription;
-  
   bool _isLoading = false;
   bool _isPlaying = false;
   String? _currentTitle;
@@ -60,50 +77,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  // Starts a local proxy on localhost to relay YouTube audio bytes to just_audio
-  Future<String> _startLocalProxy(String youtubeStreamUrl) async {
-    await _stopLocalProxy();
-
-    _localProxyServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    final port = _localProxyServer!.port;
-
-    final client = HttpClient();
-
-    _proxySubscription = _localProxyServer!.listen((HttpRequest req) async {
-      try {
-        final ytReq = await client.getUrl(Uri.parse(youtubeStreamUrl));
-        ytReq.headers.set(
-          'User-Agent',
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        );
-        ytReq.headers.set('Referer', 'https://www.youtube.com/');
-
-        final ytResponse = await ytReq.close();
-        
-        req.response.statusCode = ytResponse.statusCode;
-        ytResponse.headers.forEach((name, values) {
-          for (var value in values) {
-            req.response.headers.add(name, value);
-          }
-        });
-
-        await ytResponse.pipe(req.response);
-      } catch (e) {
-        req.response.statusCode = HttpStatus.internalServerError;
-        await req.response.close();
-      }
-    });
-
-    return 'http://127.0.0.1:$port/';
-  }
-
-  Future<void> _stopLocalProxy() async {
-    await _proxySubscription?.cancel();
-    _proxySubscription = null;
-    await _localProxyServer?.close(force: true);
-    _localProxyServer = null;
-  }
-
   Future<void> _playYouTubeAudio(String query) async {
     if (query.trim().isEmpty) return;
 
@@ -117,19 +90,19 @@ class _HomeScreenState extends State<HomeScreen> {
 
       final video = searchResult.first;
       final manifest = await _yt.videos.streamsClient.getManifest(video.id);
-
+      
       final audioStreams = manifest.audioOnly;
       if (audioStreams.isEmpty) {
         throw Exception('No valid audio stream found.');
       }
 
-      final audioStream = audioStreams.withHighestBitrate();
-
-      // Route through local proxy
-      final proxyUrl = await _startLocalProxy(audioStream.url.toString());
+      final audioStreamInfo = audioStreams.withHighestBitrate();
 
       await _player.stop();
-      await _player.setUrl(proxyUrl);
+      
+      // Feed stream directly to player engine via custom StreamAudioSource
+      final source = YouTubeAudioSource(_yt, audioStreamInfo);
+      await _player.setAudioSource(source);
       _player.play();
 
       setState(() {
@@ -155,7 +128,6 @@ class _HomeScreenState extends State<HomeScreen> {
 
   @override
   void dispose() {
-    _stopLocalProxy();
     _player.dispose();
     _yt.close();
     _controller.dispose();
